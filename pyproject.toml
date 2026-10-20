@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pr-rescue"
-version = "0.1.0"
+version = "0.2.0"
 description = "List your pull requests in other people's repositories by who has to act next, and find the ones a stale bot closed."
 readme = "README.md"
 license = "MIT"

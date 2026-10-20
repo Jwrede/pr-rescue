@@ -33,6 +33,19 @@ def pr(number, state="OPEN", **kw):
     return base
 
 
+def check(name, conclusion):
+    return {"__typename": "CheckRun", "name": name, "conclusion": conclusion}
+
+
+def status(context, state, description=""):
+    return {"__typename": "StatusContext", "context": context, "state": state, "description": description}
+
+
+def commits_with(*contexts):
+    rollup = {"state": "FAILURE", "contexts": {"nodes": list(contexts)}}
+    return {"nodes": [{"commit": {"committedDate": "2026-05-01T00:00:00Z", "statusCheckRollup": rollup}}]}
+
+
 def bot_closed(number, **kw):
     return pr(
         number,
@@ -65,10 +78,8 @@ def test_closed_by_human_or_merged_is_ignored():
 def test_open_states():
     assert classify(pr(1, mergeable="CONFLICTING"), "me", NOW, {}).reason == "merge conflict"
     assert classify(pr(2, reviewDecision="CHANGES_REQUESTED"), "me", NOW, {}).reason == "changes requested"
-    failing = {
-        "nodes": [{"commit": {"committedDate": "2026-05-01T00:00:00Z", "statusCheckRollup": {"state": "FAILURE"}}}]
-    }
-    assert classify(pr(3, commits=failing), "me", NOW, {}).reason == "checks failing"
+    failing = commits_with(check("test (3.11)", "FAILURE"), check("lint", "SUCCESS"))
+    assert classify(pr(3, commits=failing), "me", NOW, {}).reason == "checks failing: test (3.11)"
     approved = classify(pr(4, reviewDecision="APPROVED"), "me", NOW, {})
     assert (approved.waiting_on, approved.reason) == ("maintainers", "approved, not merged")
     assert classify(pr(10), "me", NOW, {}).reason == "waiting for review"
@@ -117,3 +128,26 @@ def test_cli_json(monkeypatch, capsys):
     monkeypatch.setattr(cli, "scan", lambda author, include_own=False: [])
     assert cli.main(["--author", "me", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == []
+
+
+def test_deploy_approval_status_is_not_a_failure():
+    vercel = commits_with(status("Vercel", "FAILURE", "Authorization required to deploy."), status("cla", "SUCCESS"))
+    f = classify(pr(30, commits=vercel), "me", NOW, {})
+    assert (f.waiting_on, f.reason) == ("maintainers", "waiting for review")
+
+
+def test_cancelled_checks_wait_on_maintainers_and_hide_aggregate_gate():
+    runs = commits_with(check("enforce-all-checks", "FAILURE"), check("image-build", "CANCELLED"))
+    f = classify(pr(31, commits=runs), "me", NOW, {})
+    assert (f.waiting_on, f.reason) == ("maintainers", "checks cancelled, need a rerun: image-build")
+
+
+def test_aggregate_gate_alone_still_counts():
+    f = classify(pr(32, commits=commits_with(check("all-checks", "FAILURE"))), "me", NOW, {})
+    assert f.reason == "checks failing: all-checks"
+
+
+def test_real_failure_beats_cancellation():
+    runs = commits_with(check("unit", "FAILURE"), check("e2e", "CANCELLED"), check("required-checks", "FAILURE"))
+    f = classify(pr(33, commits=runs), "me", NOW, {})
+    assert (f.waiting_on, f.reason) == ("you", "checks failing: unit")

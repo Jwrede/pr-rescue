@@ -23,7 +23,13 @@ _FIELDS = """
     }
     reviews(states: APPROVED, first: 1) { totalCount }
     comments(last: 1) { nodes { author { login __typename } createdAt } }
-    commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
+    commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state contexts(first: 100) {
+      nodes {
+        __typename
+        ... on CheckRun { name conclusion }
+        ... on StatusContext { context state description }
+      }
+    } } } } }
   }
 """
 
@@ -102,6 +108,37 @@ def _is_bot(actor: dict | None) -> bool:
     return actor.get("__typename") == "Bot" or login.endswith("[bot]") or login in BOT_LOGINS
 
 
+# Status contexts that only say a deployment preview needs a maintainer's approval
+# (Vercel, Netlify and similar for pull requests from forks). The author cannot act on them.
+_APPROVAL_ONLY = re.compile(
+    r"authori[sz]ation required|requires? (approval|authori[sz]ation)|awaiting approval", re.IGNORECASE
+)
+# Gate jobs that only report whether all other checks passed.
+_AGGREGATE = re.compile(r"all[-_ ]?checks|required[-_ ]?checks|ci[-_ ]?success|all[-_ ]?green", re.IGNORECASE)
+_FAILED = {"FAILURE", "ERROR", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+
+
+def check_states(rollup: dict | None) -> tuple[list[str], list[str]]:
+    """Names of failed and of cancelled checks, without approval-only and aggregate checks."""
+    if not rollup:
+        return [], []
+    failed, cancelled, aggregates = [], [], []
+    for node in (rollup.get("contexts") or {}).get("nodes") or []:
+        if node.get("__typename") == "StatusContext":
+            name, state = node.get("context", ""), node.get("state")
+            if _APPROVAL_ONLY.search(node.get("description") or ""):
+                continue
+        else:
+            name, state = node.get("name", ""), node.get("conclusion")
+        if state == "CANCELLED":
+            cancelled.append(name)
+        elif state in _FAILED:
+            (aggregates if _AGGREGATE.search(name) else failed).append(name)
+    if not failed and not cancelled and aggregates:
+        failed = aggregates
+    return failed, cancelled
+
+
 def _days_since(stamp: str | None, now: dt.datetime) -> int:
     if not stamp:
         return 0
@@ -150,7 +187,7 @@ def classify(pr: dict, author: str, now: dt.datetime, successors: dict[tuple[str
 
     idle = _days_since(pr.get("updatedAt"), now)
     commits = pr["commits"]["nodes"]
-    rollup = (commits[-1]["commit"].get("statusCheckRollup") or {}).get("state") if commits else None
+    failed, cancelled = check_states(commits[-1]["commit"].get("statusCheckRollup") if commits else None)
     last_comment = (pr["comments"]["nodes"] or [None])[-1]
     last_commit = commits[-1]["commit"]["committedDate"] if commits else pr["createdAt"]
 
@@ -160,8 +197,8 @@ def classify(pr: dict, author: str, now: dt.datetime, successors: dict[tuple[str
         waiting, reason = "you", "merge conflict"
     elif pr.get("reviewDecision") == "CHANGES_REQUESTED":
         waiting, reason = "you", "changes requested"
-    elif rollup in ("FAILURE", "ERROR"):
-        waiting, reason = "you", "checks failing"
+    elif failed:
+        waiting, reason = "you", "checks failing: " + ", ".join(failed[:3]) + (" ..." if len(failed) > 3 else "")
     elif (
         last_comment
         and last_comment["author"]
@@ -170,6 +207,8 @@ def classify(pr: dict, author: str, now: dt.datetime, successors: dict[tuple[str
         and last_comment["createdAt"] > last_commit
     ):
         waiting, reason = "you", f"unanswered comment from {last_comment['author']['login']}"
+    elif cancelled:
+        waiting, reason = "maintainers", "checks cancelled, need a rerun: " + ", ".join(cancelled[:3])
     elif approved:
         waiting, reason = "maintainers", "approved, not merged"
     else:

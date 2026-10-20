@@ -14,11 +14,17 @@ to act next:
     person since your last commit
   - PRs a bot closed without merging, marked `APPROVED` when they had an approval, and whether
     the branch still exists, so you know if a reopen can work
-- **Waiting on maintainers**: approved but not merged, or no review yet, with the days idle
+- **Waiting on maintainers**: approved but not merged, no review yet, or checks that were
+  cancelled and need a rerun you cannot trigger from a fork, with the days idle
 - **Already handled**: bot-closed PRs that a later PR of yours references, for example
   "Replaces #123"
 
 PRs that a person closed, or that you closed yourself, are left out.
+
+Checks are read one by one. A status that only says a deployment preview needs approval
+(Vercel's "Authorization required to deploy" on fork PRs, for example) does not count as a
+failure, and a gate job such as `enforce-all-checks` that fails only because another job was
+cancelled is not reported separately. Failed checks are named in the output.
 
 ## Why
 
@@ -52,7 +58,7 @@ login and makes a few GraphQL search calls; no token setup is needed.
 ```
 $ pr-rescue
 Waiting on you (3)
-  acme/router#5059  checks failing  [open, 78d idle]
+  acme/router#5059  checks failing: test (3.11)  [open, 78d idle]
       Add retry budget to the proxy
       https://github.com/acme/router/pull/5059
   acme/sdk#1472  closed by github-actions, branch still exists: reopen or resubmit  [closed, 68d idle]
