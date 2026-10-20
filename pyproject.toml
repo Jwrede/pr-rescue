@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pr-rescue"
+version = "0.1.0"
+description = "List your pull requests in other people's repositories by who has to act next, and find the ones a stale bot closed."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Jonathan Wrede" }]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+pr-rescue = "pr_rescue.cli:main"
+
+[tool.ruff]
+line-length = 120
